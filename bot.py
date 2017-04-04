@@ -7,6 +7,7 @@ from pprint import pprint
 from datetime import datetime, timedelta
 import shelve
 import os
+import time
 
 with open('brands.json', 'r') as f:
 	links = json.load(f)
@@ -104,7 +105,7 @@ def reply_to_comment(comment, search_result):
 	new_comment = comment.reply(reply_body)
 	return new_comment
 
-def main():
+def run_manual():
 	reddit = praw.Reddit('MakeupFinderBot')
 	# sr = reddit.subreddit('muacjdiscussion')
 	# private sub for testing
@@ -136,6 +137,26 @@ def main():
 				replied_comments.append(comment.id)
 				replied_shelve['comments'] = replied_comments
 
+def run_stream():
+	reddit = praw.Reddit('MakeupFinderBot')
+	# sr = reddit.subreddit('muacjdiscussion')
+	# private sub for testing
+	sr = reddit.subreddit('MakeupFinderBot')
+
+	ignore = 0
+
+	for comment in sr.stream.comments():
+		# ignore the first 100
+		if ignore < 100:
+			ignore += 1
+		else:
+			print(comment.body)
+			search_result = search_comment(comment)
+			if search_result:
+				print(search_result)
+				reply_to_comment(comment, search_result)
+
+			time.sleep(15)
 
 if __name__ == '__main__':
-	main()
+	run_stream()
