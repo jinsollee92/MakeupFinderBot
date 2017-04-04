@@ -44,8 +44,8 @@ def find_product_links(products):
 			if brand in sephora_links:
 				# try using all 5 words first and then chop up by single word from the back
 				for i in range(5, 1, -1):
-					found = scrape.match_sephora_products(sephora_links[brand], ' '.join(product_name[:i]))
-					if found:
+					found = scrape.match_product('sephora', brand, ' '.join(product_name[:i]))
+					if found is not None:
 						title = '%s - %s' % (brand, found['name'])
 						try:
 							result[title]['sephora'] = found
@@ -55,7 +55,7 @@ def find_product_links(products):
 						break
 			if brand in ulta_links:
 				for i in range(5, 1, -1):
-					found = scrape.match_ulta_products(ulta_links[brand], ' '.join(product_name[:i]))
+					found = scrape.match_product('ulta', brand, ' '.join(product_name[:i]))
 					if found:
 						title = '%s - %s' % (brand, found['name'])
 						# search Sephora list to see if there are same products with different cases
@@ -99,7 +99,7 @@ def search_comment(comment):
 		return
 	return search_result
 
-def reply_to_comment(search_result):
+def reply_to_comment(comment, search_result):
 	reply_body = generate_comment(search_result)
 	new_comment = comment.reply(reply_body)
 	return new_comment
@@ -129,10 +129,11 @@ def main():
 				if comment.id in replied_shelve:
 					continue
 				search_result = search_comment(comment)
-				# print(search_result)
-				new_comment = reply_to_comment(search_result)
+				if search_result:
+					print(search_result)
+					new_comment = reply_to_comment(comment, search_result)
+					replied_comments.append(new_comment.id)
 				replied_comments.append(comment.id)
-				replied_comments.append(new_comment.id)
 				replied_shelve['comments'] = replied_comments
 
 

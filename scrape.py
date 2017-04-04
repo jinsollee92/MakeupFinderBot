@@ -1,7 +1,9 @@
 import requests
 from lxml import html
 import json
+import os
 from pprint import pprint
+from lxml.etree import XPathEvalError
 
 queries = {
 	'sephora': ('http://www.sephora.com/brand-list',
@@ -43,60 +45,105 @@ def get_brands(store):
 		# if '\u' in brand:
 	return results
 
-def match_sephora_products(pageUrl, name):
-	matched = {}
-	products_page = requests.get(pageUrl)
+def get_sephora_products(url):
+	products_page = requests.get(url)
 	tree = html.fromstring(products_page.content)
 	# Sephora returns search results inside a json defined in a script block
-	response_str = tree.xpath('//script[@id="searchResult"]/text()')[0]
-	products = json.loads(response_str)['products']
-	for product in products:
-		product_name = product['display_name']
-		product_url = product['product_url']
-		if product_name.lower().startswith(name.lower()):
-			matched['name'] = product_name
-			matched['url'] = 'http://www.sephora.com' + product_url
-			more_info = product['derived_sku']
-			if 'list_price' in more_info:
-				matched['price'] = '$%.2f' % float(more_info['list_price'])
-			elif 'list_price_min' in more_info and 'list_price_max' in more_info:
-				matched['price'] = '$%.2f - $%.2f' % \
-					(float(more_info['list_price_min']), float(more_info['list_price_max']))
-			return matched
-	return None
+	try:
+		response_str = tree.xpath('//script[@id="searchResult"]/text()')[0]
+		products_found = json.loads(response_str)['products']
+	except (IndexError, KeyError):
+		return []
+	products = []
+	for p in products_found:
+		product = {
+			'name': p['display_name'],
+			'url': 'http://www.sephora.com' + p['product_url']
+		}
+		if 'list_price' in p['derived_sku']:
+			product['price'] = '$%.2f' % float(p['derived_sku']['list_price'])
+		elif 'list_price_min' in p['derived_sku'] and 'list_price_max' in p['derived_sku']:
+			product['price'] = '$%.2f - $%.2f' % \
+				(p['derived_sku']['list_price_min'], p['derived_sku']['list_price_max'])
+		products.append(product)
+	return products
 
-def match_ulta_products(pageUrl, name):
-	matched = {}
-	products_page = requests.get(pageUrl)
+def get_ulta_products(url):
+	products_page = requests.get(url)
 	tree = html.fromstring(products_page.content)
-	products = tree.xpath('//p[@class="prod-desc"]/a/text()')
+	products_found = tree.xpath('//p[@class="prod-desc"]/a/text()')
 	# Ulta doesn't have a view all page, so use next page links
 	nextPage = tree.xpath('//li[@class="next-prev floatl-span"]/a[text()="Next"]/@href')
+	products = []
 	while True:
 		# Ulta links look like: 
 		# <p class="prod-desc">
 		# 	<a href="/repair-sculpting-night-cream?productId=xlsImpprod11771005">
 		# 		Repair Sculpting Night Cream</a>
 		# </p>
-		for product in products:
-			product_name = product.strip().replace('Online Only ', '')
-			if name.lower() in product_name.lower():
-				matched['name'] = product_name
-				product_url = tree.xpath('//p[@class="prod-desc"]/a[text()=\"%s\"]/@href' % product)[0]
-				matched['url'] = 'http://www.ulta.com' + product_url
-				product_price = tree.xpath('//p[@class="prod-desc"]/a[text()=\"%s\"]/../../p[@class="price"]/a/div/span/text()' \
-					% product)[0].strip()
-				matched['price'] = product_price
-				return matched
+		for p in products_found:
+			if 'FREE' in p:
+				continue
+			try:
+				product = {
+					'name': p.strip().replace('Online Only ', ''),
+					'url': 'http://www.ulta.com' + tree.xpath('//p[@class="prod-desc"]/a[text()=\"%s\"]/@href' % p)[0],
+					'price': tree.xpath('//p[@class="prod-desc"]/a[text()=\"%s\"]/../../p[@class="price"]/a/div/span/text()' \
+						% p)[0].strip()
+				}
+				products.append(product)
+			# if the product name has special characters, these errors are raised
+			# then just skip it for now
+			except (IndexError, XPathEvalError):
+				continue
 		if len(nextPage) > 0:
-			nextPage = pageUrl + nextPage[0]
+			nextPage = url + nextPage[0]
 			# get elements from the next page
 			products_page = requests.get(nextPage)
 			tree = html.fromstring(products_page.content)
-			products = tree.xpath('//p[@class="prod-desc"]/a/text()')
+			products_found = tree.xpath('//p[@class="prod-desc"]/a/text()')
 			nextPage = tree.xpath('//li[@class="next-prev floatl-span"]/a[text()="Next"]/@href')
 		else:
-			break
+			return products
+
+def save_products(store, brand, url):
+	if not os.path.exists(os.path.relpath('product_info')):
+		os.mkdir(os.path.relpath('product_info'))
+		os.mkdir(os.path.relpath('product_info/sephora'))
+		os.mkdir(os.path.relpath('product_info/ulta'))
+
+	with open('product_info/%s/%s' % (store, brand), 'w+') as products_file:
+		if store == 'sephora':
+			json.dump(get_sephora_products(url), products_file, indent=2)
+		elif store == 'ulta':
+			json.dump(get_ulta_products(url), products_file, indent=2)
+
+def save_brand_list():
+	links = {}
+	links['sephora'] = get_brands('sephora')
+	links['ulta'] = get_brands('ulta')
+
+	with open('brands.json', 'w') as output:
+		json.dump(links, output, indent=2)
+
+def save_product_list():
+	with open('brands.json', 'r') as brands_json:
+		links = json.load(brands_json)
+	for brand in links['sephora']:
+		print(brand)
+		url = links['sephora'][brand]
+		save_products('sephora', brand, url)
+	for brand in links['ulta']:
+		print(brand)
+		url = links['ulta'][brand]
+		save_products('ulta', brand, url)
+
+def match_product(store, brand, name):
+	with open('product_info/%s/%s' % (store, brand), 'r') as products_file:
+		products = json.load(products_file)
+		for p in products:
+			if p['name'].lower() == name.lower():
+				return p
 	return None
 
 if __name__ == '__main__':
@@ -104,9 +151,7 @@ if __name__ == '__main__':
 	# print(get_brands('ulta'))
 	# print(match_sephora_products('http://www.sephora.com/benefit-cosmetics?products=all&pageSize=-1', 'Gimme Brow'))
 	# print(match_ulta_products('http://www.ulta.com/brand/clinique?N=1z12lx1Z1z141cp', 'Smart Broad Spectrum SPF 15 Custom-Repair Moisturizer For Very Dry Skin'))
-	links = {}
-	links['sephora'] = get_brands('sephora')
-	links['ulta'] = get_brands('ulta')
+	save_brand_list()
+	save_product_list()
 
-	with open('brands.json', 'w') as output:
-		json.dump(links, output, indent=2)
+
